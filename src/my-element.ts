@@ -12,74 +12,14 @@ async function getHash(text: string): Promise<string> {
   // Convert the input text to an array of bytes
   const textBytes = new TextEncoder().encode(text);
   // Calculate the hash of the input text
-  return window.crypto.subtle.digest('SHA-256', textBytes).then((hash) => {
-    // Convert the hash to a hexadecimal string
-    // Probably unnecessary
-    return Array.from(new Uint8Array(hash))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  });
+  const hash = await window.crypto.subtle.digest('SHA-256', textBytes);
+  // Wait for the Promise returned by digest() to be resolved
+  // Convert the hash to a hexadecimal string
+  // Probably unnecessary
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
-
-/** @returns whether `a` and `b` are considered identical by IEC-61850 */
-export function isSame(a: Element, b: Element): boolean {
-  if (a.tagName === 'Private')
-    return isSame(a.parentElement!, b.parentElement!) && a.isEqualNode(b);
-  return a.tagName === b.tagName;
-  // && identity(a) === identity(b);
-}
-
-export function isEqual(a: Element, b: Element): boolean {
-  if (a.closest('Private') || b.closest('Private')) return a.isEqualNode(b);
-
-  const attributeNames = new Set(
-    a.getAttributeNames().concat(b.getAttributeNames())
-  );
-  for (const name of attributeNames)
-    if (a.getAttribute(name) !== b.getAttribute(name)) return false;
-
-  if (a.childElementCount === 0)
-    return (
-      b.childElementCount === 0 &&
-      a.textContent?.trim() === b.textContent?.trim()
-    );
-
-  const aChildren = Array.from(a.children);
-  const bChildren = Array.from(b.children);
-
-  for (const aChild of aChildren) {
-    const twindex = bChildren.findIndex((bChild) => isEqual(aChild, bChild));
-    if (twindex === -1) return false;
-    bChildren.splice(twindex, 1);
-  }
-
-  for (const bChild of bChildren)
-    if (!aChildren.find((aChild) => isEqual(bChild, aChild))) return false;
-
-  return true;
-}
-
-// define the compareNodes() function
-function compareNodes(element1: Element, element2: Element): Element[] {
-  // iterate over the child nodes of the first XML document
-  const diffs = [];
-  for (const child1 of element1.children) {
-    // find the corresponding child in the second XML document
-    const child2index = Array.from(element2.children).findIndex((ourChild) =>
-      isEqual(child1, ourChild)
-    );
-    const child2 = Array.from(element2.children)[child2index];
-
-    // compare the child nodes
-    const childDiffs: Element[] = compareNodes(child1, child2);
-    if (childDiffs.length > 0) {
-      diffs.push(...childDiffs);
-    }
-  }
-
-  return diffs;
-}
-
 export interface PendingStateDetail {
   promise: Promise<void>;
 }
@@ -98,13 +38,6 @@ export function newPendingStateEvent(
   });
 }
 
-/**
- * An example element.
- *
- * @fires count-changed - Indicates when the count changes
- * @slot - This element has a slot
- * @csspart button - The button
- */
 @customElement('my-element')
 export class MyElement extends LitElement {
   static override styles = css`
@@ -117,92 +50,117 @@ export class MyElement extends LitElement {
   `;
 
   /**
-   * The name to say "Hello" to.
-   */
-  @property()
-  name = 'World';
-
-  /**
    * The number of times the button has been clicked.
    */
   @property({type: Number})
   count = 0;
 
   @property()
-  documents: Document[] = [];
+  xmlDoc: Document | null = null;
+
+  @property({attribute: false})
+  reHash: string[] = [];
+
+  @property({attribute: false})
+  previousDepth = 0;
+
+  @property({attribute: false})
+  qtyAtDepth = 0;
+
+  @property({attribute: false})
+  hashTable = new Map();
+
+  @property({attribute: false})
+  depthTracker = new Map();
+
+  async nodeHash(node: Element): Promise<string> {
+    for (const name of node.getAttributeNames()) {
+      const value = node.getAttribute(name);
+      console.log(name, value);
+    }
+
+    const attrs = node.getAttributeNames().map((name) => {
+      return `${name}=${node.getAttribute(name)}`;
+    });
+
+    let contentText;
+    if (node.firstChild?.nodeType === Node.TEXT_NODE) {
+      contentText = node.firstChild.textContent;
+    }
+    const content = `${node.tagName}: ${attrs} ${contentText}`;
+    return await getHash(content);
+  }
+
+  async postOrderTraversal(node: Element, currentDepth = 0) {
+    // Traverse the tree leaves first
+    for (const child of node.children) {
+      await this.postOrderTraversal(child, currentDepth + 1);
+    }
+
+    // calculate hash for current node, excluding children
+    let nodeHash = await this.nodeHash(node);
+
+    // check how many are at the current depth
+    if (currentDepth === this.previousDepth) this.depthTracker.set(currentDepth, this.qtyAtDepth++);
+
+    // add hash to list of hashes to hash together for higher level nodes
+    this.reHash = this.reHash.concat(nodeHash);
+
+    // we are now traversing upwards, we must hash the children and this node and store the result
+    if (this.previousDepth > currentDepth && this.reHash.length !== 0) {
+      console.log(this.reHash, 'HASHING THE HECK');
+      const combinedHash =  await getHash(this.reHash.slice(this.depthTracker.get(currentDepth)).join('').concat(nodeHash)) 
+
+      this.reHash = [combinedHash];
+      nodeHash = combinedHash;
+
+      // reset tracking metadata
+      this.qtyAtDepth = 0;
+    }
+
+    // add to index
+    if (this.hashTable.has(nodeHash)) {
+      const existingValues = this.hashTable.get(nodeHash);
+      this.hashTable.set(nodeHash, [existingValues].concat(node));
+    } else {
+      this.hashTable.set(nodeHash, node);
+    }
+
+    // Log the node name and depth of this element
+    console.log(
+      `${node.nodeName} (depth ${currentDepth}) (qtyAtDepth ${
+        this.qtyAtDepth
+      }) ${this.reHash.map((h) => h.slice(0, 8))} depthTracker: ${this.depthTracker}`
+    );
+
+    this.previousDepth = currentDepth;
+  }
 
   override render() {
     return html`
-      <h1>${this.sayHello(this.name)}!</h1>
+      <h1>We hash our rehashing quite slowly</h1>
       <input
         id="compare-file-1"
-        accept=".sed,.scd,.ssd,.isd,.iid,.cid,.icd"
+        accept=".sed,.scd,.ssd,.isd,.iid,.cid,.icd,.xml"
         type="file"
         required
         @change=${(evt: Event) =>
           this.dispatchEvent(newPendingStateEvent(this.getCompareFile(evt)))}
       />
-      <input
-        id="compare-file-1"
-        accept=".sed,.scd,.ssd,.isd,.iid,.cid,.icd"
-        type="file"
-        required
-        @change=${(evt: Event) =>
-          this.dispatchEvent(newPendingStateEvent(this.getCompareFile(evt)))}
-      />
-      <button @click=${this._onClick} part="button">
-        Click Count: ${this.count}
-      </button>
+      <button @click=${this._onClick} part="button">Let's do stuff!</button>
       <slot></slot>
     `;
   }
 
-  private _onClick() {
-    this.count++;
-    this.dispatchEvent(new CustomEvent('count-changed'));
-    if (this.documents.length === 1) {
-      console.log('Now we compare');
+  private async _onClick() {
+    console.log('Now we compare');
 
-      // compare the root nodes of the XML documents
-      const firstDocEl = this.documents[0].documentElement;
-      // const secondDocEl = this.documents[0].documentElement;
+    const firstDocEl = this.xmlDoc!.documentElement;
+    await this.postOrderTraversal(firstDocEl);
 
-      // console.log(firstDocEl, secondDocEl);
-      // const diffs = compareNodes(firstDocEl, secondDocEl);
-
-      // // check the result to see if the documents are the same or different
-      // if (diffs.length === 0) {
-      //   // the documents are the same
-      //   console.log('the documents are the same');
-      // } else {
-      //   console.log('the documents are different');
-      //   console.log(diffs);
-      // }
-
-      const res = postOrderTraversal(firstDocEl);
-      console.log(res);
-      console.log(reHash)
-    }
-
-    // const hashTable = new Map();
-
-    //   const startTime = Date.now();
-
-    //     getHash(text).then(result => {
-    //       hashTable.set(i,result)
-    //     });
-
-    //   const endTime = Date.now();
-    //   console.log(`Input length: ${length}`);
-    //   console.log(`Duration: ${(endTime-startTime) / 1000} seconds`);
-  }
-
-  /**
-   * Formats a greeting
-   * @param name The name to say "Hello" to
-   */
-  sayHello(name: string): string {
-    return `Hello, ${name}`;
+    this.hashTable.forEach((v, k) =>
+      console.log(`${k.slice(0, 8)}: ${v.tagName}`)
+    );
   }
 
   private async getCompareFile(evt: Event): Promise<void> {
@@ -215,7 +173,7 @@ export class MyElement extends LitElement {
       'application/xml'
     );
 
-    this.documents.push(compareDoc);
+    this.xmlDoc = compareDoc;
   }
 }
 
@@ -224,51 +182,3 @@ declare global {
     'my-element': MyElement;
   }
 }
-
-let reHash: string[] = [];
-let depthTracker  = 0;
-
-function postOrderTraversal(node: Element, currentDepth = 0) {
-  // Recursively traverse the children of this node
-  for (const child of node.children) {
-    postOrderTraversal(child, currentDepth + 1);
-  }
-
-  // Log the node name and depth of this element
-  console.log(`${node.nodeName} (depth ${currentDepth})`);
-  reHash = reHash.concat(node.tagName);
-  if (depthTracker > currentDepth) {
-    reHash = reHash.concat('HashMyFriends');
-  }
-  depthTracker = currentDepth
-}
-
-// function postOrderTraversal(node: Element, depth = 0): void {
-//   const node_left = Array.from(node.children)[0] || null;
-//   if (node_left !== null) {
-//     // for (const child of node_left.children) {
-//       postOrderTraversal(node_left, depth + 1);
-//     // }
-//   }
-//   const node_right = Array.from(node.children).slice(1) || null;
-//   if (node_right !== null) {
-//     node_right.forEach((child) => {
-//       postOrderTraversal(child, depth + 1);
-//     });
-//   }
-//   console.log(`${node.nodeName} (depth ${depth})`);
-// }
-
-// function postOrderTraversal(node:Element): Element[]{
-//   if (node.children.length === 0) {
-//     return [node];
-//   } else {
-//     let arr: Element[]= [];
-//     for (let i = 0; i < node.children.length; i++) {
-//       const childValues = postOrderTraversal(node.children[0]);
-//       arr = arr.concat(childValues);
-//     }
-//     arr.push(node);
-//     return arr;
-//   }
-// }
