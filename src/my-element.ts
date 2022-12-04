@@ -8,6 +8,73 @@ import {LitElement, html, css} from 'lit';
 
 import {customElement, property} from 'lit/decorators.js';
 
+function filterByDifference(
+  array1: Element[],
+  array2: Element[]
+): [Element[], Element[]] {
+  const onlyInA = differenceInFirstArray(array1.flat(), array2.flat());
+  const onlyInb = differenceInFirstArray(array2.flat(), array1.flat());
+  return [onlyInA, onlyInb];
+}
+
+function differenceInFirstArray(array1: Element[], array2: Element[]) {
+  return array1.filter(function (current) {
+    return (
+      array2.filter(function (current_b) {
+        return current_b.isEqualNode(current);
+      }).length == 0
+    );
+  });
+}
+
+// function getMapValues(
+//   map: Map<string, Element | Element[]>,
+//   key: string
+// ) {
+//   if (map.get(key)!.constructor.name === 'Element') {
+//     return map.get(key)!
+//   } else {
+//     (<Element[]>map.get(key)!).forEach((arrItem) => {
+//       console.log(arrItem);
+//     });
+//   }
+// }
+
+function compareMaps(
+  map1: Map<string, Element[] | Element>,
+  map2: Map<string, Element[] | Element>
+) {
+  const sameKeyDifferentValues = [];
+  const onlyIn1 = [];
+  const onlyIn2 = [];
+  for (const key of map1.keys()) {
+    if (map2.has(key)) {
+      if (Array.isArray(map1.get(key)!) || Array.isArray(map2.get(key)!))
+        // if (map1.get(key) !== map2.get(key)) {
+        sameKeyDifferentValues.push(
+          filterByDifference(
+            [...(<Element[]>map1.get(key))],
+            [...(<Element[]>map2.get(key))]
+          )
+        );
+      // }
+    } else {
+      onlyIn1.push(map1.get(key));
+    }
+  }
+  for (const key of map2.keys()) {
+    if (!map1.has(key)) {
+      onlyIn2.push(map2.get(key));
+    }
+  }
+  console.log('Same key, different values');
+  console.log(sameKeyDifferentValues);
+  console.log('only in 1');
+  console.log(onlyIn1);
+  console.log('only in 2');
+  console.log(onlyIn2);
+}
+
 async function getHash(text: string): Promise<string> {
   // Convert the input text to an array of bytes
   const textBytes = new TextEncoder().encode(text);
@@ -56,7 +123,7 @@ export class MyElement extends LitElement {
   count = 0;
 
   @property()
-  xmlDoc: Document | null = null;
+  xmlDoc: Document[] = [];
 
   @property({attribute: false})
   reHash: string[] = [];
@@ -74,10 +141,10 @@ export class MyElement extends LitElement {
   depthTracker = new Map();
 
   async nodeHash(node: Element): Promise<string> {
-    for (const name of node.getAttributeNames()) {
-      const value = node.getAttribute(name);
-      console.log(name, value);
-    }
+    // for (const name of node.getAttributeNames()) {
+    //   const value = node.getAttribute(name);
+    //   console.log(name, value);
+    // }
 
     const attrs = node.getAttributeNames().map((name) => {
       return `${name}=${node.getAttribute(name)}`;
@@ -101,15 +168,21 @@ export class MyElement extends LitElement {
     let nodeHash = await this.nodeHash(node);
 
     // check how many are at the current depth
-    if (currentDepth === this.previousDepth) this.depthTracker.set(currentDepth, this.qtyAtDepth++);
+    // if (currentDepth === this.previousDepth)
+    this.depthTracker.set(currentDepth, this.qtyAtDepth++);
 
     // add hash to list of hashes to hash together for higher level nodes
     this.reHash = this.reHash.concat(nodeHash);
 
     // we are now traversing upwards, we must hash the children and this node and store the result
     if (this.previousDepth > currentDepth && this.reHash.length !== 0) {
-      console.log(this.reHash, 'HASHING THE HECK');
-      const combinedHash =  await getHash(this.reHash.slice(this.depthTracker.get(currentDepth)).join('').concat(nodeHash)) 
+      // console.log(this.reHash, 'HASHING THE HECK');
+      const combinedHash = await getHash(
+        this.reHash
+          .slice(this.depthTracker.get(currentDepth))
+          .join('')
+          .concat(nodeHash)
+      );
 
       this.reHash = [combinedHash];
       nodeHash = combinedHash;
@@ -127,11 +200,14 @@ export class MyElement extends LitElement {
     }
 
     // Log the node name and depth of this element
-    console.log(
-      `${node.nodeName} (depth ${currentDepth}) (qtyAtDepth ${
-        this.qtyAtDepth
-      }) ${this.reHash.map((h) => h.slice(0, 8))} depthTracker: ${this.depthTracker}`
-    );
+    // console.log(
+    //   `${node.nodeName} (depth ${currentDepth}) (qtyAtDepth ${
+    //     this.qtyAtDepth
+    //   }) ${this.reHash.map((h) => h.slice(0, 8))} depthTracker`
+    // );
+    // this.depthTracker.forEach((k, v) => {
+    //   console.log(`key: ${k} value: ${v}`);
+    // });
 
     this.previousDepth = currentDepth;
   }
@@ -147,20 +223,53 @@ export class MyElement extends LitElement {
         @change=${(evt: Event) =>
           this.dispatchEvent(newPendingStateEvent(this.getCompareFile(evt)))}
       />
+      <input
+        id="compare-file-2"
+        accept=".sed,.scd,.ssd,.isd,.iid,.cid,.icd,.xml"
+        type="file"
+        required
+        @change=${(evt: Event) =>
+          this.dispatchEvent(newPendingStateEvent(this.getCompareFile(evt)))}
+      />
       <button @click=${this._onClick} part="button">Let's do stuff!</button>
       <slot></slot>
     `;
   }
 
+  hashInit() {
+    this.reHash = [];
+    this.previousDepth = 0;
+    this.qtyAtDepth = 0;
+    this.hashTable = new Map();
+    this.depthTracker = new Map();
+  }
+
   private async _onClick() {
-    console.log('Now we compare');
+    if (this.xmlDoc!.length === 2) {
+      console.log('Now we compare');
 
-    const firstDocEl = this.xmlDoc!.documentElement;
-    await this.postOrderTraversal(firstDocEl);
+      const startTime = performance.now();
 
-    this.hashTable.forEach((v, k) =>
-      console.log(`${k.slice(0, 8)}: ${v.tagName}`)
-    );
+      const firstDocEl = this.xmlDoc![0].documentElement;
+      this.hashInit();
+      await this.postOrderTraversal(firstDocEl);
+      const firstDocHashes = new Map(this.hashTable);
+
+      this.hashInit();
+      const secondDocEl = this.xmlDoc![1].documentElement;
+      await this.postOrderTraversal(secondDocEl);
+      // this.hashTable.forEach((v, k) =>
+      //   console.log(`${k.slice(0, 8)}: ${v.tagName}`)
+      // );
+      const secondDocHashes = new Map(this.hashTable);
+
+      const endTime = performance.now();
+      // Calculate the duration of the function
+      const duration = endTime - startTime;
+      console.log(duration);
+
+      compareMaps(firstDocHashes, secondDocHashes);
+    }
   }
 
   private async getCompareFile(evt: Event): Promise<void> {
@@ -173,7 +282,7 @@ export class MyElement extends LitElement {
       'application/xml'
     );
 
-    this.xmlDoc = compareDoc;
+    this.xmlDoc?.push(compareDoc);
   }
 }
 

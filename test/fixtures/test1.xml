@@ -18,7 +18,11 @@
     <node3>
         <child6>value8</child6>
         <child7>
-            <subchild5>value9</subchild5>
+            <subchild5>value10</subchild5>
+            <subchild6>value11</subchild6>
+        </child7>
+        <child7>
+            <subchild5>value10</subchild5>
             <subchild6>value11</subchild6>
         </child7>
     </node3>
