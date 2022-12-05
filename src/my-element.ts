@@ -75,18 +75,25 @@ function compareMaps(
   console.log(onlyIn2);
 }
 
-async function getHash(text: string): Promise<string> {
-  // Convert the input text to an array of bytes
-  const textBytes = new TextEncoder().encode(text);
-  // Calculate the hash of the input text
-  const hash = await window.crypto.subtle.digest('SHA-256', textBytes);
-  // Wait for the Promise returned by digest() to be resolved
-  // Convert the hash to a hexadecimal string
-  // Probably unnecessary
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+
+
+function getHash(text: string): string {
+      let h1 = 0xdeadbeef,
+        h2 = 0x41c6ce57;
+      for (let i = 0, ch; i < text.length; i++) {
+        ch = text.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+      }
+      h1 =
+        Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+        Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+      h2 =
+        Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+        Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+      return '' + ((h2 >>> 0).toString(16).padStart(8, '0') +
+            (h1 >>> 0).toString(16).padStart(8, '0'))
+  }
 export interface PendingStateDetail {
   promise: Promise<void>;
 }
@@ -140,7 +147,7 @@ export class MyElement extends LitElement {
   @property({attribute: false})
   depthTracker = new Map();
 
-  async nodeHash(node: Element): Promise<string> {
+  nodeHash(node: Element): string {
     // for (const name of node.getAttributeNames()) {
     //   const value = node.getAttribute(name);
     //   console.log(name, value);
@@ -155,17 +162,17 @@ export class MyElement extends LitElement {
       contentText = node.firstChild.textContent;
     }
     const content = `${node.tagName}: ${attrs} ${contentText}`;
-    return await getHash(content);
+    return getHash(content);
   }
 
-  async postOrderTraversal(node: Element, currentDepth = 0) {
+  postOrderTraversal(node: Element, currentDepth = 0) {
     // Traverse the tree leaves first
     for (const child of node.children) {
-      await this.postOrderTraversal(child, currentDepth + 1);
+      this.postOrderTraversal(child, currentDepth + 1);
     }
 
     // calculate hash for current node, excluding children
-    let nodeHash = await this.nodeHash(node);
+    let nodeHash = this.nodeHash(node);
 
     // check how many are at the current depth
     // if (currentDepth === this.previousDepth)
@@ -177,7 +184,7 @@ export class MyElement extends LitElement {
     // we are now traversing upwards, we must hash the children and this node and store the result
     if (this.previousDepth > currentDepth && this.reHash.length !== 0) {
       // console.log(this.reHash, 'HASHING THE HECK');
-      const combinedHash = await getHash(
+      const combinedHash = getHash(
         this.reHash
           .slice(this.depthTracker.get(currentDepth))
           .join('')
@@ -244,7 +251,7 @@ export class MyElement extends LitElement {
     this.depthTracker = new Map();
   }
 
-  private async _onClick() {
+  private _onClick() {
     if (this.xmlDoc!.length === 2) {
       console.log('Now we compare');
 
@@ -252,12 +259,12 @@ export class MyElement extends LitElement {
 
       const firstDocEl = this.xmlDoc![0].documentElement;
       this.hashInit();
-      await this.postOrderTraversal(firstDocEl);
+      this.postOrderTraversal(firstDocEl);
       const firstDocHashes = new Map(this.hashTable);
 
       this.hashInit();
       const secondDocEl = this.xmlDoc![1].documentElement;
-      await this.postOrderTraversal(secondDocEl);
+      this.postOrderTraversal(secondDocEl);
       // this.hashTable.forEach((v, k) =>
       //   console.log(`${k.slice(0, 8)}: ${v.tagName}`)
       // );
